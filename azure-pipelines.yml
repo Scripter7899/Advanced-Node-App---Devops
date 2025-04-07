@@ -14,17 +14,17 @@ pool:
   vmImage: 'ubuntu-latest'
 
 stages:
-# 🛠️ Build and Test
 - stage: BuildAndTest
-  displayName: '🔧 Build, Test, and Lint'
+  displayName: '🔧 Build, Lint, and Unit Test'
   jobs:
     - job: BuildJob
-      displayName: '🧪 Run Unit Tests & Lint Check'
+      displayName: 'Build and Lint'
       steps:
+
         - task: NodeTool@0
           inputs:
             versionSpec: '18.x'
-          displayName: 'Use Node.js 18'
+          displayName: 'Use Node.js 18.x'
 
         - script: |
             cd src
@@ -34,7 +34,7 @@ stages:
         - script: |
             cd src
             npm run lint
-          displayName: '🔍 Run ESLint'
+          displayName: '🧹 Run ESLint'
 
         - script: |
             cd src
@@ -42,7 +42,7 @@ stages:
           displayName: '🧪 Run Unit Tests'
 
         - task: ArchiveFiles@2
-          displayName: '📦 Archive Code for Deployment'
+          displayName: '📦 Zip Code for Deployment'
           inputs:
             rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
             includeRootFolder: false
@@ -56,19 +56,13 @@ stages:
             artifact: 'drop'
             publishLocation: 'pipeline'
 
-# 🧪 Staging Deployment
-- stage: DeployStaging
-  displayName: '🚀 Deploy to Staging'
+- stage: DeployDev
+  displayName: '🚀 Deploy to Dev Environment'
   dependsOn: BuildAndTest
   jobs:
-    - job: DeployStagingJob
-      displayName: '🚀 Deploy Staging'
+    - job: DeployDevJob
+      displayName: 'Create Web App and Deploy to Dev'
       steps:
-        - task: DownloadPipelineArtifact@2
-          inputs:
-            artifact: 'drop'
-            path: '$(Pipeline.Workspace)/drop'
-
         - task: AzureCLI@2
           displayName: '🔧 Ensure Resource Group and Create Web App'
           inputs:
@@ -77,49 +71,89 @@ stages:
             scriptLocation: 'inlineScript'
             inlineScript: |
               echo "🔍 Checking if resource group '${{ variables.resourceGroup }}' exists..."
-              if ! az group show --name ${{ variables.resourceGroup }} &> /dev/null; then
-                echo "Resource group not found. Creating..."
-                az group create --name ${{ variables.resourceGroup }} --location ${{ variables.location }}
+              if ! az group show --name "${{ variables.resourceGroup }}" &> /dev/null; then
+                echo "⚙️ Creating resource group..."
+                az group create --name "${{ variables.resourceGroup }}" --location "${{ variables.location }}"
               else
                 echo "✅ Resource group exists."
               fi
 
               echo "🔍 Validating runtime '${{ variables.runtime }}'..."
-              supported_runtimes=$(az webapp list-runtimes --os linux --query "[?starts_with(name, 'NODE|')].name" -o tsv)
-              if echo "$supported_runtimes" | grep -qx "${{ variables.runtime }}"; then
-                echo "✅ Runtime is valid."
-              else
+              supported_runtimes=$(az webapp list-runtimes --linux | grep "${{ variables.runtime }}")
+              if [ -z "$supported_runtimes" ]; then
                 echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
                 exit 1
               fi
+              echo "✅ Runtime is valid."
 
               echo "🚀 Creating Web App: ${{ variables.webAppName }}"
               az webapp create \
-                --resource-group ${{ variables.resourceGroup }} \
-                --plan ${{ variables.appServicePlan }} \
-                --name ${{ variables.webAppName }} \
-                --runtime "${{ variables.runtime }}" \
-                --deployment-container-image-name 'nginx'
+                --resource-group "${{ variables.resourceGroup }}" \
+                --plan "${{ variables.appServicePlan }}" \
+                --name "${{ variables.webAppName }}" \
+                --runtime "${{ variables.runtime }}"
+
+        - task: DownloadPipelineArtifact@2
+          inputs:
+            artifact: 'drop'
+            path: '$(Pipeline.Workspace)/drop'
 
         - task: AzureWebApp@1
-          displayName: '🚀 Deploy to Azure Web App (Staging)'
+          displayName: '🚀 Deploy to Azure Web App (Dev)'
           inputs:
             azureSubscription: 'Con1'
             appType: 'webAppLinux'
             appName: '$(webAppName)'
             package: '$(Pipeline.Workspace)/drop/app.zip'
 
-# 🔐 Production Deployment with Approval
+- stage: DeployStaging
+  displayName: '🚀 Deploy to Staging'
+  dependsOn: DeployDev
+  jobs:
+    - job: SmokeTestStaging
+      displayName: '✅ Post-Deploy Smoke Tests'
+      steps:
+        - script: |
+            echo "🔍 Checking if Web App is live..."
+            appUrl="https://$(webAppName).azurewebsites.net"
+
+            echo "Test 1: Checking HTTP 200..."
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" $appUrl)
+            if [ "$status_code" -ne 200 ]; then
+              echo "❌ Test 1 Failed: Web App is not reachable (Status Code: $status_code)"
+              exit 1
+            else
+              echo "✅ Test 1 Passed"
+            fi
+
+            echo "Test 2: Checking response time..."
+            response_time=$(curl -o /dev/null -s -w "%{time_total}\n" $appUrl)
+            if (( $(echo "$response_time > 5.0" | bc -l) )); then
+              echo "❌ Test 2 Failed: Response took too long ($response_time seconds)"
+              exit 1
+            else
+              echo "✅ Test 2 Passed"
+            fi
+
+            echo "Test 3: Checking if content is correct..."
+            content=$(curl -s $appUrl)
+            if [[ "$content" == *"Hello from Azure DevOps"* ]]; then
+              echo "✅ Test 3 Passed: Content verified"
+            else
+              echo "❌ Test 3 Failed: Unexpected content"
+              exit 1
+            fi
+
 - stage: DeployProduction
   displayName: '🚀 Deploy to Production'
   dependsOn: DeployStaging
   condition: succeeded()
-  environment: 'production'
-
   jobs:
     - deployment: DeployToProd
       displayName: '🚀 Deploy to Production Slot'
-      environment: 'production'
+      environment:
+        name: 'production'
+        resourceType: 'VirtualMachine'  # or remove if not using a specific resource
       strategy:
         runOnce:
           deploy:
