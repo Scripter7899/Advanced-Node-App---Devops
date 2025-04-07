@@ -8,114 +8,89 @@ variables:
   location: 'East US'
   appServicePlan: 'ASP-DevopsRG-87c7'
   webAppName: 'webapp-cli-demo-$(Build.BuildId)'
-  runtime: 'NODE:18-lts'
+  runtime: 'NODE|18-lts'
 
 pool:
   vmImage: 'ubuntu-latest'
 
 stages:
 - stage: Build
-  displayName: 'Build & Test'
+  displayName: 'Build and Test'
   jobs:
-    - job: BuildJob
-      displayName: 'Install, Lint, Test & Publish'
-      steps:
-        - task: NodeTool@0
-          inputs:
-            versionSpec: '18.x'
-          displayName: 'Use Node.js 18.x'
+  - job: BuildAndTest
+    displayName: 'Install, Lint, Test, and Package'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
 
-        - script: |
-            cd src
-            npm install
-          displayName: '📦 Install Dependencies'
+    - script: |
+        npm install
+      displayName: 'Install Dependencies'
 
-        - script: |
-            cd src
-            npm run lint
-          displayName: '🧹 Run ESLint'
+    - script: |
+        npm run lint
+      displayName: 'Run Linting'
 
-        - script: |
-            cd src
-            npm test
-          displayName: '🧪 Run Unit Tests'
+    - script: |
+        npm test
+      displayName: 'Run Unit Tests'
 
-        - task: ArchiveFiles@2
-          displayName: '📦 Zip Code'
-          inputs:
-            rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
-            includeRootFolder: false
-            archiveType: 'zip'
-            archiveFile: '$(Pipeline.Workspace)/drop/app.zip'
-            replaceExistingArchive: true
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
+        replaceExistingArchive: true
+      displayName: 'Package Application'
 
-        - publish: '$(Pipeline.Workspace)/drop'
-          artifact: drop
+    - publish: $(Build.ArtifactStagingDirectory)/app.zip
+      artifact: drop
+      displayName: 'Publish Artifact'
 
-- stage: Deploy_Dev
-  displayName: 'Deploy to Dev'
+- stage: DeployToStaging
+  displayName: 'Deploy to Staging'
   dependsOn: Build
   jobs:
-    - job: DeployDev
-      displayName: 'Deploy to Dev'
-      steps:
-        - task: DownloadPipelineArtifact@2
-          inputs:
-            artifactName: drop
-            targetPath: '$(Pipeline.Workspace)/drop'
+  - deployment: StagingDeployment
+    environment: 'Staging'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'YourAzureServiceConnection'
+              appType: 'webAppLinux'
+              appName: '$(webAppName)'
+              package: '$(Pipeline.Workspace)/drop/app.zip'
+            displayName: 'Deploy to Staging'
 
-        - task: AzureCLI@2
-          inputs:
-            azureSubscription: 'Con1'
-            scriptType: 'bash'
-            scriptLocation: 'inlineScript'
-            inlineScript: |
-              echo "Creating Web App: $(webAppName)"
-              az webapp create \
-                --resource-group $(resourceGroup) \
-                --plan $(appServicePlan) \
-                --name $(webAppName) \
-                --runtime "$(runtime)"
-
-        - task: AzureWebApp@1
-          displayName: '🚀 Deploy to Dev'
-          inputs:
-            azureSubscription: 'Con1'
-            appType: 'webAppLinux'
-            appName: '$(webAppName)'
-            package: '$(Pipeline.Workspace)/drop/app.zip'
-
-- stage: Deploy_Prod
+- stage: DeployToProduction
   displayName: 'Deploy to Production'
-  dependsOn: Deploy_Dev
+  dependsOn: DeployToStaging
   jobs:
-    - job: ManualApproval
-      displayName: '✅ Await Manual Approval'
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: ManualValidation@0
-          inputs:
-            notifyUsers: 'tanishqbansal2645@gmail.com'
-            instructions: 'Please approve production deployment.'
-            onTimeout: 'reject'
-            timeout: '1h'
-
-    - job: DeployProd
-      displayName: '🚀 Deploy to Production'
-      dependsOn: ManualApproval
-      pool:
-        vmImage: 'ubuntu-latest'
-      steps:
-        - task: DownloadPipelineArtifact@2
-          inputs:
-            artifactName: drop
-            targetPath: '$(Pipeline.Workspace)/drop'
-
-        - task: AzureWebApp@1
-          displayName: '🚀 Deploy to Production Web App'
-          inputs:
-            azureSubscription: 'Con1'
-            appType: 'webAppLinux'
-            appName: '$(webAppName)'
-            package: '$(Pipeline.Workspace)/drop/app.zip'
+  - deployment: ProductionDeployment
+    environment: 'Production'
+    strategy:
+      runOnce:
+        preDeploy:
+          steps:
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: |
+                your-email@example.com
+              instructions: 'Please approve the deployment to production.'
+              onTimeout: 'reject'
+            displayName: 'Approval for Production Deployment'
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'YourAzureServiceConnection'
+              appType: 'webAppLinux'
+              appName: '$(webAppName)'
+              package: '$(Pipeline.Workspace)/drop/app.zip'
+            displayName: 'Deploy to Production'
