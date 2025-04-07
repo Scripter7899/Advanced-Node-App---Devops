@@ -9,79 +9,157 @@ variables:
   appServicePlan: 'ASP-DevopsRG-87c7'
   webAppName: 'webapp-cli-demo-$(Build.BuildId)'
   runtime: 'NODE|18-lts'
+  nodeVersion: '18.x'
 
 pool:
   vmImage: 'ubuntu-latest'
 
 stages:
-- stage: Build
-  displayName: 'Build, Lint, Test'
+# 🛠 Stage 1: Build, Lint, Test
+- stage: BuildAndTest
+  displayName: 'Build, Lint, and Test'
   jobs:
   - job: BuildJob
+    displayName: 'Install, Lint, Test, and Package'
     steps:
     - task: NodeTool@0
       inputs:
-        versionSpec: '18.x'
-      displayName: 'Install Node.js'
+        versionSpec: '$(nodeVersion)'
+      displayName: 'Use Node.js $(nodeVersion)'
 
     - script: |
         npm install
-      displayName: 'Install Dependencies'
+      displayName: '📦 Install Dependencies'
 
     - script: |
-        npm run lint
-      displayName: 'Run Lint Check'
+        npx eslint . --ext .js,.ts
+      displayName: '🧹 Run Lint Check'
 
     - script: |
-        npm test
-      displayName: 'Run Unit Tests'
+        npm run test
+      displayName: '🧪 Run Unit Tests'
 
     - task: ArchiveFiles@2
+      displayName: '📦 Archive build'
       inputs:
-        rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
         includeRootFolder: false
         archiveType: 'zip'
         archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
         replaceExistingArchive: true
-      displayName: 'Archive app for deployment'
 
-    - publish: $(Build.ArtifactStagingDirectory)/app.zip
-      artifact: drop
-
-- stage: DeployDev
-  displayName: 'Deploy to Development'
-  dependsOn: Build
-  jobs:
-  - job: DeployToDev
-    steps:
-    - download: current
-      artifact: drop
-
-    - task: AzureWebApp@1
+    - task: PublishBuildArtifacts@1
+      displayName: '📤 Publish Artifact'
       inputs:
-        azureSubscription: 'Con1'
-        appType: 'webAppLinux'
-        appName: '$(webAppName)'
-        package: $(Pipeline.Workspace)/drop/app.zip
-      displayName: 'Deploy to Azure (Dev)'
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/app.zip'
+        ArtifactName: 'drop'
 
+# 🚀 Stage 2: Deploy to Development
+- stage: DeployDev
+  displayName: 'Deploy to Dev'
+  dependsOn: BuildAndTest
+  jobs:
+  - deployment: DeployToDev
+    displayName: 'Deploy App to Dev'
+    environment: 'dev'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+
+          - task: AzureCLI@2
+            displayName: '🔧 Ensure Resource Group and Create Web App'
+            inputs:
+              azureSubscription: 'Con1'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "🔍 Checking if resource group '${{ variables.resourceGroup }}' exists..."
+                if ! az group show --name ${{ variables.resourceGroup }} &>/dev/null; then
+                  echo "❌ Resource group not found. Creating..."
+                  az group create --name ${{ variables.resourceGroup }} --location "${{ variables.location }}"
+                else
+                  echo "✅ Resource group exists."
+                fi
+
+                echo "🔍 Validating runtime '${{ variables.runtime }}'..."
+                runtime_check=$(az webapp list-runtimes | grep -i "${{ variables.runtime }}")
+                if [ -z "$runtime_check" ]; then
+                  echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
+                  exit 1
+                else
+                  echo "✅ Runtime supported."
+                fi
+
+                echo "🚀 Creating Web App: ${{ variables.webAppName }}"
+                az webapp create \
+                  --resource-group ${{ variables.resourceGroup }} \
+                  --plan ${{ variables.appServicePlan }} \
+                  --name ${{ variables.webAppName }} \
+                  --runtime "${{ variables.runtime }}"
+
+          - task: AzureWebApp@1
+            displayName: '🚀 Deploy to Azure Web App (Dev)'
+            inputs:
+              azureSubscription: 'Con1'
+              appType: 'webAppLinux'
+              appName: '$(webAppName)'
+              package: $(Pipeline.Workspace)/drop/app.zip
+
+          - script: |
+              echo "🔍 Running smoke tests..."
+              appUrl="https://$(webAppName).azurewebsites.net"
+
+              echo "Test 1: Checking HTTP 200..."
+              status_code=$(curl -s -o /dev/null -w "%{http_code}" $appUrl)
+              if [ "$status_code" -ne 200 ]; then
+                echo "❌ Test 1 Failed: Web App is not reachable (Status Code: $status_code)"
+                exit 1
+              else
+                echo "✅ Test 1 Passed"
+              fi
+
+              echo "Test 2: Checking response time..."
+              response_time=$(curl -o /dev/null -s -w "%{time_total}\n" $appUrl)
+              if (( $(echo "$response_time > 5.0" | bc -l) )); then
+                echo "❌ Test 2 Failed: Response took too long ($response_time seconds)"
+                exit 1
+              else
+                echo "✅ Test 2 Passed"
+              fi
+
+              echo "Test 3: Checking if content is correct..."
+              content=$(curl -s $appUrl)
+              if [[ "$content" == *"Hello from Azure DevOps"* ]]; then
+                echo "✅ Test 3 Passed: Content verified"
+              else
+                echo "❌ Test 3 Failed: Unexpected content"
+                exit 1
+              fi
+            displayName: '✅ Post-Deploy Smoke Tests (Dev)'
+
+# ✅ Stage 3: Deploy to Production (with approval)
 - stage: DeployProd
   displayName: 'Deploy to Production'
   dependsOn: DeployDev
   condition: succeeded()
-  approval:
-    approvals:
-      - approvers: ['your-approver@domain.com']
   jobs:
-  - job: DeployToProd
-    steps:
-    - download: current
-      artifact: drop
+  - deployment: DeployToProd
+    displayName: 'Deploy App to Production'
+    environment: 'production'  # Requires manual approval in Azure DevOps UI
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
 
-    - task: AzureWebApp@1
-      inputs:
-        azureSubscription: 'Con1'
-        appType: 'webAppLinux'
-        appName: '$(webAppName)-prod'
-        package: $(Pipeline.Workspace)/drop/app.zip
-      displayName: 'Deploy to Azure (Prod)'
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'Con1'
+              appType: 'webAppLinux'
+              appName: '$(webAppName)-prod'
+              package: $(Pipeline.Workspace)/drop/app.zip
+            displayName: '🚀 Deploy to Azure Web App (Prod)'
