@@ -15,10 +15,9 @@ pool:
 
 stages:
 - stage: Build
-  displayName: 'Build and Test'
+  displayName: 'Build, Lint, Test'
   jobs:
-  - job: BuildAndTest
-    displayName: 'Install, Lint, Test, and Package'
+  - job: BuildJob
     steps:
     - task: NodeTool@0
       inputs:
@@ -31,7 +30,7 @@ stages:
 
     - script: |
         npm run lint
-      displayName: 'Run Linting'
+      displayName: 'Run Lint Check'
 
     - script: |
         npm test
@@ -44,53 +43,45 @@ stages:
         archiveType: 'zip'
         archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
         replaceExistingArchive: true
-      displayName: 'Package Application'
+      displayName: 'Archive app for deployment'
 
     - publish: $(Build.ArtifactStagingDirectory)/app.zip
       artifact: drop
-      displayName: 'Publish Artifact'
 
-- stage: DeployToStaging
-  displayName: 'Deploy to Staging'
+- stage: DeployDev
+  displayName: 'Deploy to Development'
   dependsOn: Build
   jobs:
-  - deployment: StagingDeployment
-    environment: 'Staging'
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: AzureWebApp@1
-            inputs:
-              azureSubscription: 'YourAzureServiceConnection'
-              appType: 'webAppLinux'
-              appName: '$(webAppName)'
-              package: '$(Pipeline.Workspace)/drop/app.zip'
-            displayName: 'Deploy to Staging'
+  - job: DeployToDev
+    steps:
+    - download: current
+      artifact: drop
 
-- stage: DeployToProduction
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: 'Con1'
+        appType: 'webAppLinux'
+        appName: '$(webAppName)'
+        package: $(Pipeline.Workspace)/drop/app.zip
+      displayName: 'Deploy to Azure (Dev)'
+
+- stage: DeployProd
   displayName: 'Deploy to Production'
-  dependsOn: DeployToStaging
+  dependsOn: DeployDev
+  condition: succeeded()
+  approval:
+    approvals:
+      - approvers: ['your-approver@domain.com']
   jobs:
-  - deployment: ProductionDeployment
-    environment: 'Production'
-    strategy:
-      runOnce:
-        preDeploy:
-          steps:
-          - task: ManualValidation@0
-            inputs:
-              notifyUsers: |
-                your-email@example.com
-              instructions: 'Please approve the deployment to production.'
-              onTimeout: 'reject'
-            displayName: 'Approval for Production Deployment'
-        deploy:
-          steps:
-          - task: AzureWebApp@1
-            inputs:
-              azureSubscription: 'YourAzureServiceConnection'
-              appType: 'webAppLinux'
-              appName: '$(webAppName)'
-              package: '$(Pipeline.Workspace)/drop/app.zip'
-            displayName: 'Deploy to Production'
+  - job: DeployToProd
+    steps:
+    - download: current
+      artifact: drop
+
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: 'Con1'
+        appType: 'webAppLinux'
+        appName: '$(webAppName)-prod'
+        package: $(Pipeline.Workspace)/drop/app.zip
+      displayName: 'Deploy to Azure (Prod)'
