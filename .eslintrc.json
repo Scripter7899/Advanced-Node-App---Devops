@@ -1,11 +1,15 @@
-{
-  "env": {
-    "node": true,
-    "es2021": true
+module.exports = {
+  env: {
+    node: true,
+    commonjs: true,
+    es2021: true,
+    jest: true,
   },
-  "extends": "eslint:recommended",
-  "parserOptions": {
-    "ecmaVersion": 12
+  extends: 'eslint:recommended',
+  parserOptions: {
+    ecmaVersion: 12,
   },
-  "rules": {}
-}
+  rules: {
+    // Add custom rules here
+  },
+};
