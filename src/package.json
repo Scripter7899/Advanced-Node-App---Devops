@@ -1,0 +1,12 @@
+{
+  "name": "azure-node-ci-cd",
+  "version": "1.0.0",
+  "description": "Test Azure DevOps pipeline",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
