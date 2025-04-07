@@ -14,13 +14,12 @@ pool:
   vmImage: 'ubuntu-latest'
 
 stages:
-- stage: BuildAndTest
-  displayName: '🔧 Build, Lint, and Unit Test'
+- stage: Build
+  displayName: 'Build & Test'
   jobs:
     - job: BuildJob
-      displayName: 'Build and Lint'
+      displayName: 'Install, Lint, Test & Publish'
       steps:
-
         - task: NodeTool@0
           inputs:
             versionSpec: '18.x'
@@ -42,131 +41,81 @@ stages:
           displayName: '🧪 Run Unit Tests'
 
         - task: ArchiveFiles@2
-          displayName: '📦 Zip Code for Deployment'
+          displayName: '📦 Zip Code'
           inputs:
             rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
             includeRootFolder: false
             archiveType: 'zip'
-            archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
+            archiveFile: '$(Pipeline.Workspace)/drop/app.zip'
             replaceExistingArchive: true
 
-        - task: PublishPipelineArtifact@1
-          inputs:
-            targetPath: '$(Build.ArtifactStagingDirectory)/app.zip'
-            artifact: 'drop'
-            publishLocation: 'pipeline'
+        - publish: '$(Pipeline.Workspace)/drop'
+          artifact: drop
 
-- stage: DeployDev
-  displayName: '🚀 Deploy to Dev Environment'
-  dependsOn: BuildAndTest
+- stage: Deploy_Dev
+  displayName: 'Deploy to Dev'
+  dependsOn: Build
   jobs:
-    - job: DeployDevJob
-      displayName: 'Create Web App and Deploy to Dev'
+    - job: DeployDev
+      displayName: 'Deploy to Dev'
       steps:
+        - task: DownloadPipelineArtifact@2
+          inputs:
+            artifactName: drop
+            targetPath: '$(Pipeline.Workspace)/drop'
+
         - task: AzureCLI@2
-          displayName: '🔧 Ensure Resource Group and Create Web App'
           inputs:
             azureSubscription: 'Con1'
             scriptType: 'bash'
             scriptLocation: 'inlineScript'
             inlineScript: |
-              echo "🔍 Checking if resource group '${{ variables.resourceGroup }}' exists..."
-              if ! az group show --name "${{ variables.resourceGroup }}" &> /dev/null; then
-                echo "⚙️ Creating resource group..."
-                az group create --name "${{ variables.resourceGroup }}" --location "${{ variables.location }}"
-              else
-                echo "✅ Resource group exists."
-              fi
-
-              echo "🔍 Validating runtime '${{ variables.runtime }}'..."
-              supported_runtimes=$(az webapp list-runtimes --linux | grep "${{ variables.runtime }}")
-              if [ -z "$supported_runtimes" ]; then
-                echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
-                exit 1
-              fi
-              echo "✅ Runtime is valid."
-
-              echo "🚀 Creating Web App: ${{ variables.webAppName }}"
+              echo "Creating Web App: $(webAppName)"
               az webapp create \
-                --resource-group "${{ variables.resourceGroup }}" \
-                --plan "${{ variables.appServicePlan }}" \
-                --name "${{ variables.webAppName }}" \
-                --runtime "${{ variables.runtime }}"
-
-        - task: DownloadPipelineArtifact@2
-          inputs:
-            artifact: 'drop'
-            path: '$(Pipeline.Workspace)/drop'
+                --resource-group $(resourceGroup) \
+                --plan $(appServicePlan) \
+                --name $(webAppName) \
+                --runtime "$(runtime)"
 
         - task: AzureWebApp@1
-          displayName: '🚀 Deploy to Azure Web App (Dev)'
+          displayName: '🚀 Deploy to Dev'
           inputs:
             azureSubscription: 'Con1'
             appType: 'webAppLinux'
             appName: '$(webAppName)'
             package: '$(Pipeline.Workspace)/drop/app.zip'
 
-- stage: DeployStaging
-  displayName: '🚀 Deploy to Staging'
-  dependsOn: DeployDev
+- stage: Deploy_Prod
+  displayName: 'Deploy to Production'
+  dependsOn: Deploy_Dev
   jobs:
-    - job: SmokeTestStaging
-      displayName: '✅ Post-Deploy Smoke Tests'
+    - job: ManualApproval
+      displayName: '✅ Await Manual Approval'
+      pool:
+        vmImage: 'ubuntu-latest'
       steps:
-        - script: |
-            echo "🔍 Checking if Web App is live..."
-            appUrl="https://$(webAppName).azurewebsites.net"
+        - task: ManualValidation@0
+          inputs:
+            notifyUsers: 'tanishqbansal2645@gmail.com'
+            instructions: 'Please approve production deployment.'
+            onTimeout: 'reject'
+            timeout: '1h'
 
-            echo "Test 1: Checking HTTP 200..."
-            status_code=$(curl -s -o /dev/null -w "%{http_code}" $appUrl)
-            if [ "$status_code" -ne 200 ]; then
-              echo "❌ Test 1 Failed: Web App is not reachable (Status Code: $status_code)"
-              exit 1
-            else
-              echo "✅ Test 1 Passed"
-            fi
+    - job: DeployProd
+      displayName: '🚀 Deploy to Production'
+      dependsOn: ManualApproval
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: DownloadPipelineArtifact@2
+          inputs:
+            artifactName: drop
+            targetPath: '$(Pipeline.Workspace)/drop'
 
-            echo "Test 2: Checking response time..."
-            response_time=$(curl -o /dev/null -s -w "%{time_total}\n" $appUrl)
-            if (( $(echo "$response_time > 5.0" | bc -l) )); then
-              echo "❌ Test 2 Failed: Response took too long ($response_time seconds)"
-              exit 1
-            else
-              echo "✅ Test 2 Passed"
-            fi
-
-            echo "Test 3: Checking if content is correct..."
-            content=$(curl -s $appUrl)
-            if [[ "$content" == *"Hello from Azure DevOps"* ]]; then
-              echo "✅ Test 3 Passed: Content verified"
-            else
-              echo "❌ Test 3 Failed: Unexpected content"
-              exit 1
-            fi
-
-- stage: DeployProduction
-  displayName: '🚀 Deploy to Production'
-  dependsOn: DeployStaging
-  condition: succeeded()
-  jobs:
-    - deployment: DeployToProd
-      displayName: '🚀 Deploy to Production Slot'
-      environment:
-        name: 'production'
-        resourceType: 'VirtualMachine'  # or remove if not using a specific resource
-      strategy:
-        runOnce:
-          deploy:
-            steps:
-              - task: DownloadPipelineArtifact@2
-                inputs:
-                  artifact: 'drop'
-                  path: '$(Pipeline.Workspace)/drop'
-
-              - task: AzureWebApp@1
-                displayName: '🚀 Deploy to Azure Web App (Production)'
-                inputs:
-                  azureSubscription: 'Con1'
-                  appType: 'webAppLinux'
-                  appName: '$(webAppName)'
-                  package: '$(Pipeline.Workspace)/drop/app.zip'
+        - task: AzureWebApp@1
+          displayName: '🚀 Deploy to Production Web App'
+          inputs:
+            azureSubscription: 'Con1'
+            appType: 'webAppLinux'
+            appName: '$(webAppName)'
+            package: '$(Pipeline.Workspace)/drop/app.zip'
