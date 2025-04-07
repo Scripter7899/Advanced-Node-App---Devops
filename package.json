@@ -1,0 +1,19 @@
+{
+  "name": "azure-node-ci-cd",
+  "version": "1.0.0",
+  "description": "Test Azure DevOps pipeline",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "mocha server.test.js",
+    "lint": "eslint . --ext .js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "chai": "^4.4.1",
+    "mocha": "^10.2.0",
+    "eslint": "^8.57.0"
+  }
+}
