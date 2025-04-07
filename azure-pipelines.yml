@@ -9,7 +9,7 @@ variables:
   appServicePlan: 'ASP-DevopsRG-87c7'
   webAppNameDev: 'webapp-cli-dev-$(Build.BuildId)'
   webAppNameProd: 'webapp-cli-prod'
-  runtime: 'NODE|18-lts'
+  runtime: 'NODE:18-lts'
 
 pool:
   vmImage: 'ubuntu-latest'
