@@ -3,62 +3,66 @@ trigger:
     include:
       - main
 
-pool:
-  vmImage: 'ubuntu-latest'
-
 variables:
   resourceGroup: 'rg-devops-cli'
   location: 'East US'
   appServicePlan: 'ASP-DevopsRG-87c7'
-  webAppNameDev: 'webapp-cli-demo-dev'
-  webAppNameProd: 'webapp-cli-demo-prod'
+  webAppNameDev: 'webapp-cli-dev-$(Build.BuildId)'
+  webAppNameProd: 'webapp-cli-prod'
   runtime: 'NODE|18-lts'
 
+pool:
+  vmImage: 'ubuntu-latest'
+
 stages:
-# -------------------- Build Stage --------------------
-- stage: Build
-  displayName: 'Build and Test'
+
+# ---------- Build & Test ----------
+- stage: BuildAndTest
+  displayName: 'Build, Lint, and Unit Test'
   jobs:
     - job: BuildJob
-      displayName: 'Install, Lint, Test & Package'
+      displayName: 'Install, Lint, Test'
       steps:
-
         - task: NodeTool@0
           inputs:
             versionSpec: '18.x'
-          displayName: 'Use Node.js 18'
+          displayName: 'Use Node.js 18.x'
 
         - script: |
+            cd src
             npm install
           displayName: '📦 Install Dependencies'
 
         - script: |
-            npx eslint . || echo "⚠️ Linting warnings (not failing build)"
-          displayName: '🧹 Run ESLint'
+            cd src
+            npx eslint . --ext .js,.jsx,.ts,.tsx
+          displayName: '✅ Run ESLint'
 
         - script: |
-            npm test
-          displayName: '🧪 Run Unit Tests with Jest'
+            cd src
+            npm test -- --ci
+          displayName: '🧪 Run Unit Tests'
 
         - task: ArchiveFiles@2
-          displayName: '📦 Zip for Deployment'
+          displayName: '📦 Zip Code for Deployment'
           inputs:
-            rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+            rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
             includeRootFolder: false
             archiveType: 'zip'
             archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
             replaceExistingArchive: true
 
-        - task: PublishPipelineArtifact@1
+        - task: PublishBuildArtifacts@1
+          displayName: '📤 Publish Artifact'
           inputs:
-            targetPath: '$(Build.ArtifactStagingDirectory)'
-            artifact: 'drop'
-            publishLocation: 'pipeline'
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/app.zip'
+            ArtifactName: 'drop'
+            publishLocation: 'Container'
 
-# -------------------- Dev Deployment --------------------
+# ---------- Deploy to Dev ----------
 - stage: DeployDev
   displayName: 'Deploy to Development'
-  dependsOn: Build
+  dependsOn: BuildAndTest
   jobs:
     - deployment: DeployToDev
       displayName: 'Deploy Web App to Dev'
@@ -67,29 +71,85 @@ stages:
         runOnce:
           deploy:
             steps:
+              - task: AzureCLI@2
+                displayName: '🔧 Ensure Resource Group and Create Web App'
+                inputs:
+                  azureSubscription: 'Con1'
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    echo "🔍 Checking if resource group '${{ variables.resourceGroup }}' exists..."
+                    if ! az group show --name ${{ variables.resourceGroup }} &> /dev/null; then
+                      echo "❌ Resource group not found. Creating..."
+                      az group create --name ${{ variables.resourceGroup }} --location "${{ variables.location }}"
+                    else
+                      echo "✅ Resource group exists."
+                    fi
+
+                    echo "🔍 Validating runtime '${{ variables.runtime }}'..."
+                    # Check if runtime is available (simple validation)
+                    if [[ "${{ variables.runtime }}" != NODE* ]]; then
+                      echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
+                      exit 1
+                    fi
+
+                    echo "🚀 Creating Web App: ${{ variables.webAppNameDev }}"
+                    az webapp create \
+                      --resource-group ${{ variables.resourceGroup }} \
+                      --plan ${{ variables.appServicePlan }} \
+                      --name ${{ variables.webAppNameDev }} \
+                      --runtime "${{ variables.runtime }}"
+
               - task: DownloadPipelineArtifact@2
                 inputs:
                   artifactName: 'drop'
                   targetPath: '$(Pipeline.Workspace)'
 
               - task: AzureWebApp@1
-                displayName: '🚀 Deploy to Dev Web App'
+                displayName: '🚀 Deploy to Azure Web App (Dev)'
                 inputs:
                   azureSubscription: 'Con1'
                   appType: 'webAppLinux'
                   appName: '$(webAppNameDev)'
                   package: '$(Pipeline.Workspace)/app.zip'
 
-# -------------------- Production Deployment --------------------
+              - script: |
+                  echo "🔍 Checking if Web App is live..."
+                  appUrl="https://$(webAppNameDev).azurewebsites.net"
+
+                  echo "Test 1: Checking HTTP 200..."
+                  status_code=$(curl -s -o /dev/null -w "%{http_code}" $appUrl)
+                  if [ "$status_code" -ne 200 ]; then
+                    echo "❌ Test 1 Failed: Web App is not reachable (Status Code: $status_code)"
+                    exit 1
+                  else
+                    echo "✅ Test 1 Passed"
+                  fi
+
+                  echo "Test 2: Checking response time..."
+                  response_time=$(curl -o /dev/null -s -w "%{time_total}\n" $appUrl)
+                  if (( $(echo "$response_time > 5.0" | bc -l) )); then
+                    echo "❌ Test 2 Failed: Response took too long ($response_time seconds)"
+                    exit 1
+                  else
+                    echo "✅ Test 2 Passed"
+                  fi
+
+                  echo "Test 3: Checking if content is correct..."
+                  content=$(curl -s $appUrl)
+                  if [[ "$content" == *"Hello from Azure DevOps"* ]]; then
+                    echo "✅ Test 3 Passed: Content verified"
+                  else
+                    echo "❌ Test 3 Failed: Unexpected content"
+                    exit 1
+                  fi
+                displayName: '✅ Post-Deploy Smoke Tests'
+
+# ---------- Deploy to Prod ----------
 - stage: DeployProd
   displayName: 'Deploy to Production'
   dependsOn: DeployDev
   condition: succeeded()
-  approval:
-    approvals:
-      - reviewers:
-          - name: '<YOUR-APPROVER-EMAIL-OR-ID>'
-            type: User
   jobs:
     - deployment: DeployToProd
       displayName: 'Deploy Web App to Prod'
