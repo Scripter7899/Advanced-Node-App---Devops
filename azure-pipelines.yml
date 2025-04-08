@@ -47,7 +47,7 @@ stages:
           displayName: '📦 Zip Code for Deployment'
           inputs:
             rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
-            includeRootFolder: false
+            includeRootFolder: true
             archiveType: 'zip'
             archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
             replaceExistingArchive: true
@@ -115,7 +115,7 @@ stages:
               - script: |
                   echo "🔁 Warm-up and Smoke Test with Retry..."
                   unzip app.zip -d appdir
-                  cd appdir
+                  cd appdir/src
                   npm install
                   export TEST_URL="https://$(webAppNameDev).azurewebsites.net"
                   npm run smoketest
