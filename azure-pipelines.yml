@@ -83,12 +83,6 @@ stages:
                       echo "✅ Resource group exists."
                     fi
 
-                    echo "🔍 Validating runtime '${{ variables.runtime }}'..."
-                    if [[ "${{ variables.runtime }}" != NODE* ]]; then
-                      echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
-                      exit 1
-                    fi
-
                     echo "🚀 Creating Web App: ${{ variables.webAppNameDev }}"
                     az webapp create \
                       --resource-group ${{ variables.resourceGroup }} \
@@ -132,6 +126,25 @@ stages:
         runOnce:
           deploy:
             steps:
+              - task: AzureCLI@2
+                displayName: '🔧 Ensure Prod Web App Exists'
+                inputs:
+                  azureSubscription: 'Con1'
+                  scriptType: 'bash'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    echo "🔍 Checking if production Web App '${{ variables.webAppNameProd }}' exists..."
+                    if ! az webapp show --name ${{ variables.webAppNameProd }} --resource-group ${{ variables.resourceGroup }} &> /dev/null; then
+                      echo "❌ Prod Web App not found. Creating..."
+                      az webapp create \
+                        --resource-group ${{ variables.resourceGroup }} \
+                        --plan ${{ variables.appServicePlan }} \
+                        --name ${{ variables.webAppNameProd }} \
+                        --runtime "${{ variables.runtime }}"
+                    else
+                      echo "✅ Prod Web App exists."
+                    fi
+
               - task: DownloadPipelineArtifact@2
                 inputs:
                   artifactName: 'drop'
