@@ -29,25 +29,22 @@ stages:
           displayName: 'Use Node.js 18.x'
 
         - script: |
-            cd src
             npm install
           displayName: '📦 Install Dependencies'
 
         - script: |
-            cd src
-            npx eslint . --ext .js,.jsx,.ts,.tsx
+            npm run lint
           displayName: '✅ Run ESLint'
 
         - script: |
-            cd src
             npm test -- --ci
           displayName: '🧪 Run Unit Tests'
 
         - task: ArchiveFiles@2
           displayName: '📦 Zip Code for Deployment'
           inputs:
-            rootFolderOrFile: '$(System.DefaultWorkingDirectory)/src'
-            includeRootFolder: true
+            rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+            includeRootFolder: false
             archiveType: 'zip'
             archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
             replaceExistingArchive: true
@@ -113,9 +110,9 @@ stages:
                   package: '$(Pipeline.Workspace)/app.zip'
 
               - script: |
-                  echo "🔁 Warm-up and Smoke Test with Retry..."
+                  echo "🔁 Warm-up and Smoke Test..."
                   unzip app.zip -d appdir
-                  cd appdir/src
+                  cd appdir
                   npm install
                   export TEST_URL="https://$(webAppNameDev).azurewebsites.net"
                   npm run smoketest
