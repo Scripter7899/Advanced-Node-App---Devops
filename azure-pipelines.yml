@@ -114,6 +114,8 @@ stages:
 
               - script: |
                   echo "🔁 Warm-up and Smoke Test with Retry..."
+                  unzip app.zip -d appdir
+                  cd appdir
                   npm install
                   export TEST_URL="https://$(webAppNameDev).azurewebsites.net"
                   npm run smoketest
