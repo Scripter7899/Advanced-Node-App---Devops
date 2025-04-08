@@ -87,7 +87,6 @@ stages:
                     fi
 
                     echo "🔍 Validating runtime '${{ variables.runtime }}'..."
-                    # Check if runtime is available (simple validation)
                     if [[ "${{ variables.runtime }}" != NODE* ]]; then
                       echo "❌ Runtime '${{ variables.runtime }}' is not supported. Exiting."
                       exit 1
@@ -114,36 +113,12 @@ stages:
                   package: '$(Pipeline.Workspace)/app.zip'
 
               - script: |
-                  echo "🔍 Checking if Web App is live..."
-                  appUrl="https://$(webAppNameDev).azurewebsites.net"
-
-                  echo "Test 1: Checking HTTP 200..."
-                  status_code=$(curl -s -o /dev/null -w "%{http_code}" $appUrl)
-                  if [ "$status_code" -ne 200 ]; then
-                    echo "❌ Test 1 Failed: Web App is not reachable (Status Code: $status_code)"
-                    exit 1
-                  else
-                    echo "✅ Test 1 Passed"
-                  fi
-
-                  echo "Test 2: Checking response time..."
-                  response_time=$(curl -o /dev/null -s -w "%{time_total}\n" $appUrl)
-                  if (( $(echo "$response_time > 5.0" | bc -l) )); then
-                    echo "❌ Test 2 Failed: Response took too long ($response_time seconds)"
-                    exit 1
-                  else
-                    echo "✅ Test 2 Passed"
-                  fi
-
-                  echo "Test 3: Checking if content is correct..."
-                  content=$(curl -s $appUrl)
-                  if [[ "$content" == *"Hello from Azure DevOps"* ]]; then
-                    echo "✅ Test 3 Passed: Content verified"
-                  else
-                    echo "❌ Test 3 Failed: Unexpected content"
-                    exit 1
-                  fi
-                displayName: '✅ Post-Deploy Smoke Tests'
+                  echo "🔁 Warm-up and Smoke Test with Retry..."
+                  npm install
+                  export TEST_URL="https://$(webAppNameDev).azurewebsites.net"
+                  npm run smoketest
+                workingDirectory: '$(Pipeline.Workspace)/drop'
+                displayName: '🔥 Warm-up & Final Smoke Test (with Retry)'
 
 # ---------- Deploy to Prod ----------
 - stage: DeployProd
