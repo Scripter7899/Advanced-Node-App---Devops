@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 
 const URL = process.env.TEST_URL || 'http://localhost:3000';
 const EXPECTED_CONTENT = 'Hello from Azure DevOps';
@@ -49,9 +50,10 @@ const checkApp = async () => {
 
 async function makeRequest() {
   const start = Date.now();
+  const client = URL.startsWith('https') ? https : http;
 
   return new Promise((resolve, reject) => {
-    http.get(URL, (res) => {
+    client.get(URL, (res) => {
       let data = '';
 
       res.on('data', chunk => data += chunk);
