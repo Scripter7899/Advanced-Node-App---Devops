@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "lint": "eslint src/**",
-    "test": "jest"
+    "test": "jest",
+    "smoketest": "node src/smoketest.js"
   },
   "author": "Your Name",
   "license": "MIT",
